@@ -1,0 +1,12 @@
+Attack,Group,Values
+DDOS,network,Destination IP=192.168.10.50
+DDOS,network,Destination Port=80
+DDOS,network,PSH Flag Count=1
+DDOS,network,ACK Flag Count=1
+DDOS,temporal,Flow Duration=bin0|bin2|bin3|bin4
+DDOS,traffic,Total Fwd Packets=bin0
+DDOS,traffic,Total Backward Packets=bin0
+DDOS,traffic,Total Length of Fwd Packets=bin0
+DDOS,traffic,Total Length of Bwd Packets=bin0
+DDOS,traffic,Active Mean=bin0
+DDOS,traffic,Idle Mean=bin0|bin1|bin2|bin3|bin4
