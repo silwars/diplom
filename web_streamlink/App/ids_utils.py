@@ -36,6 +36,8 @@ FEATURE_GROUPS = {
     ]
 }
 
+PRIMARY_FEATURES = set(f for grp in FEATURE_GROUPS.values() for f in grp)
+
 # ─── Функции ──────────────────────────────────────────
 def discretize_columns(df_in, spec, cols):
     df2 = df_in[['Timestamp'] + cols].copy()

@@ -1,6 +1,7 @@
 import streamlit as st
 import subprocess
 import time
+from datetime import timedelta
 import os
 import pandas as pd
 from glob import glob
@@ -10,7 +11,9 @@ import seaborn as sns
 from sklearn.metrics import roc_curve, auc, precision_recall_curve, confusion_matrix
 
 from ids_utils import BINNING_SPEC, SELECTED_COLS, FEATURE_GROUPS, discretize_columns, row_features
+from test_ids import run_test_ids
 from hyperparameter_tuning import run_grid_search
+
 
 # --- Директории проекта ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -65,40 +68,46 @@ page = st.session_state.page
 if page == "Тест IDS":
     st.header("Тест IDS")
 
-    # Отображение исходного набора трафика
-    base = "Friday-WorkingHours-Afternoon-DDos.pcap_ISCX_sampled2"
-    candidates = glob(os.path.join(DATA_DIR, base + "*"))
-    if candidates:
-        sample_path = max(candidates, key=os.path.getmtime)
-        ext = os.path.splitext(sample_path)[1].lower()
-        df_sample = pd.read_excel(sample_path) if ext in (".xlsx", ".xls") else pd.read_csv(sample_path)
-        st.subheader(f"Исходный набор трафика ({os.path.basename(sample_path)})")
-        st.dataframe(df_sample)
+    # 1) Файловый селект
+    unlabeled_files = sorted(glob(os.path.join(DATA_DIR, "*sampled2.csv")))
+    if unlabeled_files:
+        selected_unl = st.selectbox("Неразмеченный датасет",unlabeled_files,format_func=lambda f: os.path.basename(f),key="unl_ds")
+        df_unl = pd.read_csv(selected_unl, parse_dates=["Timestamp"])
+        st.subheader(f"Неразмеченный датасет ({os.path.basename(selected_unl)})")
+        st.dataframe(df_unl)
     else:
-        st.warning(f"Файл {base}* не найден в {DATA_DIR}")
+        st.warning("В папке data/ не найден ни один файл с суффиксом _v4")
 
-    # Запуск теста
-    if st.button("Запустить тест", key="run_test"):
-        with st.spinner("Выполняется тестирование..."):
-            ok, out, err, elapsed = run_script("Test_shablon&rules_no_label.py")
-        if not ok:
-            st.error(f"Ошибка при тестировании:{err}")
-            st.stop()
+    ds_files = sorted(glob(os.path.join(DATA_DIR, "*.csv")))
+    selected_ds = st.selectbox("Размеченный датасет", ds_files, format_func=lambda f: os.path.basename(f))
 
-        st.success(f"Тест завершён за {elapsed:.2f} сек.")
-        st.subheader("Вывод скрипта")
-        st.text(out)
+    tmpl_files = sorted(glob(os.path.join(DATA_DIR, "generated_attack_templates*.csv")))
+    selected_tmpl = st.selectbox("Шаблон атак", tmpl_files, format_func=lambda f: os.path.basename(f))
 
-        # Загрузка предсказаний
-        pred_file = find_latest_file("row_level_predictions*.csv")
-        if not pred_file:
-            st.warning("Файл row_level_predictions*.csv не найден.")
-            st.stop()
+    rules_files = sorted(glob(os.path.join(DATA_DIR, "association_rules*.csv")))
+    selected_rules = st.selectbox("Ассоц. правила", rules_files, format_func=lambda f: os.path.basename(f))
 
-        df_pred = pd.read_csv(pred_file)
-        st.subheader(f"Предсказания ({os.path.basename(pred_file)})")
-        st.dataframe(df_pred)
+    # 2) Параметры порогов
+    min_len_thresh = st.number_input("Минимальная длина A (len(A) ≥ …)",min_value=1, value=4, step=1,key="param_min_len")
+    min_rules_thresh = st.number_input("Порог fires (MIN_RULES ≥ …)",min_value=0, value=150, step=10,key="param_min_rules")
 
+    # 3) Запуск теста
+    if st.button("Запустить тест"):
+        with st.spinner("Выполняется Тест IDS..."):
+            result = run_test_ids(dataset_path=selected_ds,template_path=selected_tmpl,rules_path=selected_rules,min_rules_threshold=min_rules_thresh,min_len_thresh=min_len_thresh)
+
+            df_pred = result['predictions']
+
+        # 4) Показ метрик
+        m = result['metrics']
+        st.metric("Precision", f"{m['precision']:.2%}")
+        st.metric("Recall",    f"{m['recall']:.2%}")
+        st.write(f"TP={m['TP']}, FP={m['FP']}, TN={m['TN']}, FN={m['FN']}")
+
+
+        # 5) Предсказания
+        st.subheader("Предсказания")
+        st.dataframe(result['predictions'])
         # Подготовка arrays для метрик и графиков
         if {'Label','Predicted','fires'}.issubset(df_pred.columns):
             from sklearn.metrics import roc_curve, auc, precision_recall_curve, confusion_matrix
@@ -108,6 +117,7 @@ if page == "Тест IDS":
             y_pred  = (df_pred['Predicted'] == 'DDoS').astype(int).values
             y_score = df_pred['fires'].values
 
+            #Графики
             # 1) ROC-кривая
             fpr, tpr, _ = roc_curve(y_true, y_score)
             roc_auc = auc(fpr, tpr)
@@ -121,7 +131,6 @@ if page == "Тест IDS":
             ax_roc.legend(loc='lower right')
 
             st.pyplot(fig_roc, use_container_width=False)
-
 
             # 2) Precision–Recall кривая
             precision, recall, _ = precision_recall_curve(y_true, y_score)
@@ -160,7 +169,7 @@ elif page == "Ассоциативные правила":
     st.header("Генерация ассоциативных правил")
     if st.button("Создать правила", key="create_rules"):
         with st.spinner("Генерация правил..."):
-            ok, out, err, elapsed = run_script("association_rules_no_label.py")
+            ok, out, err, elapsed = run_script("association_rules.py")
         if not ok:
             st.error(f"Ошибка создания правил:\n{err}")
         else:
@@ -196,7 +205,7 @@ elif page == "Вычисление гиперпараметров":
     key="ht_tmpl"
 )
 
-    rules_files = sorted(glob(os.path.join(DATA_DIR, "association_rules_no_label*.csv")))
+    rules_files = sorted(glob(os.path.join(DATA_DIR, "association_rules*.csv")))
     selected_rules = st.selectbox(
     "3. Ассоциативные правила",
     rules_files,
